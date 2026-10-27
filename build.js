@@ -24,6 +24,8 @@ const STRINGS = {
     prevMatch: 'предыдущее совпадение',
     nextMatch: 'следующее совпадение',
     clearMatches: 'убрать подсветку',
+    download: 'скачать офлайн-копию',
+    toTop: '↑ к содержанию',
     count: { one: 'конспект', few: 'конспекта', many: 'конспектов', other: 'конспекта' },
   },
   en: {
@@ -37,6 +39,8 @@ const STRINGS = {
     prevMatch: 'previous match',
     nextMatch: 'next match',
     clearMatches: 'clear highlight',
+    download: 'download offline copy',
+    toTop: '↑ contents',
     count: { one: 'note', other: 'notes' },
   },
 };
@@ -102,7 +106,9 @@ function parseNote(file) {
   return { slug, ...meta, html, sections: sectionsOf(html) };
 }
 
-function layout({ lang, title, description, base, body }) {
+const OFFLINE_FILE = 'offline.html';
+
+function layout({ lang, title, description, base, body, css }) {
   return `<!doctype html>
 <html lang="${lang}">
 <head>
@@ -115,7 +121,7 @@ ${description ? `<meta name="description" content="${esc(description)}">` : ''}
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap">
-<link rel="stylesheet" href="${base}style.css">
+${css ? `<style>\n${css}</style>` : `<link rel="stylesheet" href="${base}style.css">`}
 </head>
 <body>
 ${body}
@@ -188,6 +194,7 @@ ${rows}
 ${subjectButton('', t.all, notes.length)}
 ${subjects.map((s) => subjectButton(s, s, notes.filter((n) => n.subject === s).length)).join('\n')}
 </nav>
+<a class="download" href="${OFFLINE_FILE}" download="${esc(config.title)}.html">${t.download}</a>
 </aside>
 <main class="content">
 <label class="search">${searchIcon}<input type="search" id="q" placeholder="${t.search}" aria-label="${t.search}" autocomplete="off" spellcheck="false"></label>
@@ -263,6 +270,60 @@ ${pagerLink(newer, t.newer, 'newer')}
       layout({ lang, title: `${n.title} — ${config.title}`, description: `${n.subject}, ${fullDate(n.date)}`, base: '../../', body }),
     );
   }
+
+  // Offline copy: every note in one file with inlined CSS and no scripts, so it opens from disk
+  const toc = subjects
+    .map((s) => {
+      const links = notes
+        .filter((n) => n.subject === s)
+        .map(
+          (n) =>
+            `<a href="#${esc(n.slug)}"><span class="d">${esc(tinyDate(n.date))}</span><span class="t">${esc(n.title)}</span></a>`,
+        )
+        .join('\n');
+      return `<h2 class="toc-h">${esc(s)}</h2>\n<nav class="subnav lectures toc">\n${links}\n</nav>`;
+    })
+    .join('\n');
+
+  const articles = subjects
+    .flatMap((s) => notes.filter((n) => n.subject === s))
+    .map(
+      (n) => `<article class="offline-note" id="${esc(n.slug)}">
+<header class="note-head">
+<p class="muted">${esc(n.subject)} · <time datetime="${n.date}">${esc(fullDate(n.date))}</time></p>
+<h1>${esc(n.title)}</h1>
+</header>
+<div class="prose">
+${n.html.replace(/<h([2-4]) id="/g, `<h$1 id="${n.slug}-`)}
+</div>
+<a class="back" href="#top">${t.toTop}</a>
+</article>`,
+    )
+    .join('\n');
+
+  const offlineBody = `<div class="page" id="top">
+<aside class="side">
+<header class="side-head">
+<p class="muted">${countLabel(notes.length)}</p>
+<h1>${esc(config.title)}</h1>
+</header>
+${toc}
+</aside>
+<main class="content">
+${articles}
+</main>
+</div>`;
+
+  fs.writeFileSync(
+    path.join(OUT, OFFLINE_FILE),
+    layout({
+      lang,
+      title: config.title,
+      description: config.description,
+      body: offlineBody,
+      css: fs.readFileSync(path.join(SRC, 'style.css'), 'utf8'),
+    }),
+  );
 
   // Full-text search data by section, loaded by app.js on first search
   fs.writeFileSync(path.join(OUT, 'search.json'), JSON.stringify(Object.fromEntries(notes.map((n) => [n.slug, n.sections]))));
